@@ -35,8 +35,9 @@ export async function cleanResult(inputString: string) {
   return inputString.toString().replaceAll('\n', '').replaceAll(/\//g, '').replaceAll('*', '').replaceAll('.', '')
 }
 
-function getFormatFromBase64(base64String: string) {
-  if (!base64String.startsWith('data:image/')) return 'image/png'
+function getFormatFromBase64(base64String: string, expected_type: string) {
+  if (expected_type==='Image' && (!base64String.startsWith('data:image/'))) return 'image/png'
+  if (expected_type==='Document' && (!base64String.startsWith('data:application/pdf'))) return 'application/pdf'
   return base64String.split(';')[0].split(':')[1]
 }
 
@@ -111,7 +112,7 @@ export async function getDescriptionFromGemini(base64Image: string, type: string
   const imagePart = {
     inline_data: {
       data: base64Image.startsWith('data:') ? base64Image.split(',')[1] : base64Image,
-      mimeType: getFormatFromBase64(base64Image),
+      mimeType: getFormatFromBase64(base64Image, 'Image'),
     },
   }
   const textPart = {
@@ -143,7 +144,8 @@ export async function getDescriptionFromGemini(base64Image: string, type: string
   }
 }
 
-export async function getPromptFromImageFromGemini(base64Image: string) {
+// ADDED FUNCTION TO EXTRACT INSIGHTS FROM PDF BY GEMINI
+export async function insightsFromGemini(base64Documents: [string], userPrompt: string) {
   const location = process.env.NEXT_PUBLIC_VERTEX_API_LOCATION
   const geminiModel = process.env.NEXT_PUBLIC_GEMINI_MODEL
   const projectId = process.env.NEXT_PUBLIC_PROJECT_ID
@@ -153,32 +155,24 @@ export async function getPromptFromImageFromGemini(base64Image: string) {
     model: geminiModel,
   })
 
-  const prompt = `Generate a highly detailed text prompt, suitable for a text-to-image model such as Imagen 3, to recreate the uploaded image with maximum accuracy. The prompt should describe these aspects of the image:
-  1.  **Subject:**  Main objects/figures, appearance, features, species (if applicable), clothing, pose, actions. Be extremely specific (e.g., "a fluffy ginger cat with emerald green eyes sitting on a windowsill" instead of "a cat").
-  2.  **Composition:** Arrangement of subjects (centered, off-center, foreground, background), perspective/camera angle (close-up, wide shot, bird's-eye view).
-  3.  **Setting:** Environment, location, time of day, weather. Be specific (e.g., "a dimly lit, ornate library with towering bookshelves" instead of "a library").
-  4.  **Style:** Artistic style (photorealistic, oil painting, watercolor, cartoon, pixel art, abstract). Mention specific artists if relevant.
-  5.  **Lighting:** Lighting conditions (bright sunlight, soft indoor lighting, dramatic shadows, backlighting), direction and intensity of light.
-  6.  **Color Palette:** Dominant colors, overall color scheme (vibrant, muted, monochromatic, warm, cool).
-  7.  **Texture:** Textures of objects and surfaces (smooth, rough, furry, metallic, glossy).
-  8.  **Mood/Atmosphere:** Overall feeling or emotion (serene, joyful, mysterious, ominous).
+  const extractInsights =
+    'Analyze the given documents explaining the brand identidy guidelines and extract all the important \
+    insights that need to be considered for creating graphic contents and illustrations usable by a marketing \
+    team for creating illustrations and ads.'
 
-  **Output Format:**  I want the prompt to be ONLY a single paragraph of text, directly usable by the text-to-image model.  **Do not add any conversational filler, preambles, or extra sentences like "Text-to-Image Prompt:". Do not format the output as a list or use any special characters like <0xC2><0xA0>.**
-  **Example Output (Correct Format): "A photorealistic image of a Ragdoll or Birman cat with light cream and beige long fur, sitting upright on a kitchen counter or appliance with its paws tucked beneath it. The cat has bright blue eyes, a small pink nose, and pointed, tufted ears. Its tail is long and fluffy, draping down behind it. The background is slightly blurred and features a dark horizontal band suggesting an appliance, and a glass partition with black metal frames. The lighting is soft and diffused, illuminating the cat evenly. The dominant colors are light cream, beige, white, blue, and black. The overall style is realistic photography with a focus on detail and natural lighting. The image conveys a sense of calmness and gentle curiosity."
-  **Important:** The prompt must be highly descriptive, prioritizing the most visually important elements for accurate recreation. The prompt can be up to 75 tokens.`
+  const documentParts = {
+    inline_data: base64Documents.map(base64Document => ({
+      data: base64Document.startsWith('data:') ? base64Document.split(',')[1] : base64Document,
+      mimeType: getFormatFromBase64(base64Document, 'Document')
+    })),
+  };
 
-  const imagePart = {
-    inline_data: {
-      data: base64Image.startsWith('data:') ? base64Image.split(',')[1] : base64Image,
-      mimeType: getFormatFromBase64(base64Image),
-    },
-  }
   const textPart = {
-    text: prompt,
+    text: extractInsights,
   }
 
   const reqData = {
-    contents: [{ role: 'user', parts: [imagePart, textPart] }],
+    contents: [{ role: 'user', parts: [documentParts, textPart] }],
   }
 
   try {
@@ -190,14 +184,13 @@ export async function getPromptFromImageFromGemini(base64Image: string) {
     if (contentResponse.instances !== undefined && 'error' in contentResponse.instances[0].prompt)
       throw Error(await cleanResult(contentResponse.instances[0].prompt))
 
-    const newDescription = contentResponse.candidates[0].content.parts[0].text.replace(/  +/g, ' ').trimEnd()
+    const newPrompt = await cleanResult(contentResponse.candidates[0].content.parts[0].text)
 
-    if (newDescription.includes('Error')) return '(provided type is not matching image)'
-    else return newDescription
+    return newPrompt
   } catch (error) {
-    console.error(JSON.stringify(truncateLog(error), undefined, 4))
+    console.error(error)
     return {
-      error: 'Error while getting prompt from Image with Gemini.',
+      error: 'Error while extracting insights with Gemini.',
     }
   }
 }
