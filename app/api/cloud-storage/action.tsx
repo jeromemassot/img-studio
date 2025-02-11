@@ -167,3 +167,158 @@ export async function uploadBase64Image(
     }
   }
 }
+
+// DOWNLOAD PDF FILE FROM GSC BUCKET
+// AND ENCODING IN BASE64 FORMAT
+
+export async function downloadDocument(gcsUri: string) {
+  const storage = new Storage({ projectId })
+
+  const { bucketName, fileName } = await decomposeUri(gcsUri)
+
+  try {
+    const [res] = await storage.bucket(bucketName).file(fileName).download()
+
+    const base64Document = Buffer.from(res).toString('base64')
+
+    return {
+      document: base64Document,
+    }
+  } catch (error) {
+    console.error(error)
+    return {
+      error: 'Error while downloading the document',
+    }
+  }
+}
+
+// ADDED FUNCTION TO UPLOAD A PDF DOCUMENT
+export async function uploadBase64IDocument(
+  base64Document: string,
+  bucketName: string,
+  objectName: string,
+  folderName: string,
+  contentType: string = 'application/pdf'
+): Promise<{ success?: boolean; message?: string; error?: string; fileUrl?: string }> {
+  const storage = new Storage({ projectId })
+
+  if (!base64Document) return { error: 'Invalid base64 data.' }
+
+  const documentBuffer = Buffer.from(base64Document, 'base64')
+  const options = {
+    destination: objectName,
+    metadata: {
+      contentType: contentType,
+    },
+  }
+
+  try {
+    await storage.bucket(bucketName).file(objectName).save(documentBuffer, options)
+
+    const fileUrl = `gs://${bucketName}/documents/${folderName}/${objectName}`
+
+    return {
+      success: true,
+      message: `File uploaded to: ${fileUrl}`,
+      fileUrl: fileUrl,
+    }
+  } catch (error) {
+    console.error('Error uploading file:', error)
+    return {
+      error: 'Error uploading file to Google Cloud Storage.',
+    }
+  }
+}
+
+// ADDED FUNCTION TO SPLIT LARGE PDF INTO SEVERAL PDFS OF SIZE
+// SMALL ENOUGH TO BE INGESTED INTO A GEMINI PROMPT AS PARTS
+export async function splitPdf(gcsUri: string, maxSizeInBytes) {
+  try {
+
+    base64Document = await downloadDocument(gcsUri)
+    const pdfDoc = await PDFDocument.load(base64Document);
+    const pageCount = pdfDoc.getPageCount();
+
+    const splitFiles = [];
+    let currentPdf = null;
+    let currentPageCount = 0;
+    let currentBuffer = null;
+    let splitFileCounter = 1;
+
+    for (let i = 0; i < pageCount; i++) {
+
+      // Start of a new split file
+      if (currentPageCount === 0) {
+        currentPdf = await PDFDocument.create();
+      }
+
+      const page = pdfDoc.getPage(i);
+      currentPdf.addPage(page);
+      currentPageCount++;
+
+       currentBuffer = await currentPdf.save();
+
+      // Save and create new if size exceeds or is the last page
+      if (currentBuffer.length > maxSizeInBytes || i === pageCount -1) {
+        const newFilename = `${path.basename(filename, path.extname(filename))}_part${splitFileCounter}.pdf`;
+
+        // Upload the current split
+        uploadBase64IDocument(
+          base64Document: string,
+          bucketName: string,
+          objectName: string,
+          folderName: string,
+          contentType: string = 'application/pdf'
+        )
+
+        // Reset for the next split
+        currentPdf = null;
+        currentPageCount = 0;
+        splitFileCounter++;
+      }
+
+
+    }
+
+    return splitFiles;
+
+  } catch (error) {
+    console.error("Error splitting PDF:", error);
+    throw error; // Re-throw for handling in the calling function
+  }
+}
+
+// ADDED FUNCTION TO UPLOAD A INSIGHTS TEXT FILE
+export async function uploadTextFile(
+  text: string,
+  bucketName: string,
+  objectName: string,
+  folderName: string,
+  contentType: string = 'text/plain'
+): Promise<{ success?: boolean; message?: string; error?: string; fileUrl?: string }> {
+  const storage = new Storage({ projectId })
+
+  const options = {
+    destination: objectName,
+    metadata: {
+      contentType: contentType,
+    },
+  }
+
+  try {
+    await storage.bucket(bucketName).file(objectName).save(text, options)
+
+    const fileUrl = `gs://${bucketName}/insights/${folderName}/${objectName}`
+
+    return {
+      success: true,
+      message: `File uploaded to: ${fileUrl}`,
+      fileUrl: fileUrl,
+    }
+  } catch (error) {
+    console.error('Error uploading file:', error)
+    return {
+      error: 'Error uploading file to Google Cloud Storage.',
+    }
+  }
+}
